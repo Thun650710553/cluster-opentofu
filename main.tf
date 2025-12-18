@@ -26,6 +26,7 @@ provider "rancher2" {
 
 resource "rancher2_cluster_v2" "student_project" {
   name = "student-rke2-cluster"
+  kubernetes_version = var.workload_kubernetes_version
   rke_config {}
 }
 

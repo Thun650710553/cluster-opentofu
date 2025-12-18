@@ -36,3 +36,9 @@ variable "rancher_secret_key" {
   type        = string
   sensitive   = true
 }
+
+variable "workload_kubernetes_version" {
+  description = "Kubernetes version for RKE2"
+  type        = string
+  default     = "v.1.33.6+rke2r1" # ใส่ค่า Default ไว้กันเหนียว
+}
