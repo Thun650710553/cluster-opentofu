@@ -8,6 +8,13 @@ variable "gcp_project_id" {
   type        = string
 }
 
+variable "metadata_startup_script_old_version"{
+  value_metadata = "<<-EOF
+    #!/bin/bash
+    apt-get update -y && apt-get install -y curl
+    ${rancher2_cluster_v2.student_project.cluster_registration_token.0.insecure_node_command} --etcd --controlplane --worker
+  EOF"
+}
 variable "gcp_region" {
   description = "GCP Region"
   type        = string
