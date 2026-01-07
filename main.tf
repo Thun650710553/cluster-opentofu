@@ -82,5 +82,13 @@ resource "google_compute_instance" "rke2_node" {
     systemctl status rancher-system-agent || echo "[WARN] Agent might be starting..."
   EOF
 
+# /*
+#  <<-EOF
+#   #!/bin/bash
+#   apt-get update -y && apt-get install -y curl
+#    ${rancher2_cluster_v2.student_project.cluster_registration_token.0.insecure_node_command} --etcd --controlplane --worker
+# EOF
+# */
+
   depends_on = [ rancher2_cluster_v2.student_project ]
 }
