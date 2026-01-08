@@ -24,26 +24,22 @@ provider "rancher2" {
   insecure   = true
 }
 
-# ✅ สร้าง Cluster
+# ✅ สร้าง Cluster V2 (RKE2)
 resource "rancher2_cluster_v2" "student_project" {
-  name = "student-rke2-cluster"
-  
+  name               = "student-rke2-cluster"
   kubernetes_version = var.workload_kubernetes_version
-  
- 
   
   rke_config {
     machine_global_config = <<EOF
 cni: "calico"
 EOF
   }
-
- 
 }
 
-# ✅ สร้าง Registration Token
-resource "rancher2_cluster_register_token" "student_token" {
-  cluster_id = rancher2_cluster_v2.student_project.id
+# ✅ ดึง Registration Token จาก Cluster
+# (Rancher v2/RKE2 สร้าง Token อัตโนมัติ)
+data "rancher2_cluster_v2" "student_cluster" {
+  name = rancher2_cluster_v2.student_project.name
   
   depends_on = [rancher2_cluster_v2.student_project]
 }
@@ -66,14 +62,11 @@ resource "google_compute_instance" "rke2_node" {
     access_config {} # Public IP
   }
 
-  # ✅ รวม metadata ทั้งหมดเป็นตัวเดียว (ไม่ใช้ merge)
   metadata = {
-    ssh-keys              = "ubuntu:${var.ssh_public_key}"
-    "rancher-api-url"     = var.rancher_url
-    "cluster-token-name"  = rancher2_cluster_register_token.student_token.name
+    ssh-keys = "ubuntu:${var.ssh_public_key}"
   }
 
-  # ✅ Startup Script
+  # ✅ Startup Script - ดึง Token จาก Rancher API
   metadata_startup_script = base64decode(base64encode(<<-EOF
 #!/bin/bash
 # ========================================
@@ -89,20 +82,48 @@ echo "[INFO] Starting RKE2 Installation at $(date)..."
 apt-get update -y
 apt-get install -y curl wget jq
 
-# 2. ดึง Registration Command จาก Terraform
-REGISTRATION_CMD="${rancher2_cluster_register_token.student_token.insecure_node_command}"
+# 2. ตั้งค่า Variables
+RANCHER_URL="${var.rancher_url}"
+RANCHER_TOKEN="${var.rancher_access_key}"
+CLUSTER_ID="${rancher2_cluster_v2.student_project.id}"
+
+echo "[INFO] Rancher URL: $RANCHER_URL"
+echo "[INFO] Cluster ID: $CLUSTER_ID"
+
+# 3. ดึง Registration Token จาก Rancher API
+echo "[INFO] Fetching registration token from Rancher API..."
+RESPONSE=$(curl -s -k \
+  -H "Authorization: Bearer $RANCHER_TOKEN" \
+  "$RANCHER_URL/v1/clusters/$CLUSTER_ID/clusterregistrationtoken")
+
+echo "[DEBUG] API Response:"
+echo "$RESPONSE" | jq .
+
+# 4. ดึง Command จาก Response
+REGISTRATION_CMD=$(echo "$RESPONSE" | jq -r '.items[0].insecureNodeCommand // .items[0].nodeCommand // empty' 2>/dev/null)
 
 echo "[INFO] Registration Command:"
 echo "$REGISTRATION_CMD"
 
-# 3. ตรวจสอบ Command ไม่ว่าง
-if [ -z "$REGISTRATION_CMD" ]; then
+# 5. ตรวจสอบ Command ไม่ว่าง
+if [ -z "$REGISTRATION_CMD" ] || [ "$REGISTRATION_CMD" == "null" ]; then
   echo "[ERROR] Registration command is empty!"
-  echo "[ERROR] Cluster might not be ready yet."
-  exit 1
+  echo "[ERROR] Cluster might not be ready yet or API call failed."
+  echo "[DEBUG] Full response: $RESPONSE"
+  sleep 30
+  # ลองอีกครั้ง
+  RESPONSE=$(curl -s -k \
+    -H "Authorization: Bearer $RANCHER_TOKEN" \
+    "$RANCHER_URL/v1/clusters/$CLUSTER_ID/clusterregistrationtoken")
+  REGISTRATION_CMD=$(echo "$RESPONSE" | jq -r '.items[0].insecureNodeCommand // empty')
+  
+  if [ -z "$REGISTRATION_CMD" ]; then
+    echo "[FATAL] Still cannot get registration command. Exiting."
+    exit 1
+  fi
 fi
 
-# 4. รันคำสั่ง Join ด้วย Roles
+# 6. รันคำสั่ง Join ด้วย Roles
 echo "[INFO] Executing registration command with roles..."
 eval "sudo $REGISTRATION_CMD --etcd --controlplane --worker"
 
@@ -113,7 +134,7 @@ else
   exit 1
 fi
 
-# 5. รอให้ Service เริ่มต้น
+# 7. รอให้ Service เริ่มต้น
 echo "[INFO] Waiting for rancher-system-agent service..."
 sleep 20
 
@@ -130,8 +151,7 @@ EOF
   ))
 
   depends_on = [
-    rancher2_cluster_v2.student_project,
-    rancher2_cluster_register_token.student_token
+    rancher2_cluster_v2.student_project
   ]
 
   tags = ["rke2-node", "student-project"]
