@@ -24,25 +24,25 @@ provider "rancher2" {
   insecure   = true
 }
 
-# 1. สร้าง "ตั๋ว" รอไว้ใน Rancher (Logical Cluster)
+# 1. สร้าง Cluster ใน Rancher (V2/RKE2)
 resource "rancher2_cluster_v2" "student_project" {
   name = "student-rke2-cluster"
   
-  # สำคัญ: ต้องเป็นเวอร์ชันที่มีจริงใน Rancher (เช่น v1.28.10+rke2r1)
-  kubernetes_version = var.workload_kubernetes_version 
+  # แก้ไขจุดที่ 1: ใช้ตัวแปรรับเวอร์ชัน Kubernetes (ต้องมีค่าจริง เช่น "v1.28.10+rke2r1")
+  kubernetes_version = var.workload_kubernetes_version
   
-  # เปิดให้ Agent ปรับแต่งค่าได้
   rke_config {
+    # เพิ่ม Config พื้นฐาน (Optional แต่ใส่ไว้ก็ดีครับ)
     machine_global_config = <<EOF
 cni: "calico"
 EOF
   }
 }
 
-# 2. สร้าง VM และสั่งให้ถือตั๋ววิ่งไป Join (Physical Node)
+# 2. สร้าง VM บน GCP และสั่งให้ Join Cluster อัตโนมัติ
 resource "google_compute_instance" "rke2_node" {
   name         = "rke2-custom-node-1"
-  machine_type = "e2-medium" # ถ้าไหวแนะนำ e2-standard-2 จะลื่นกว่า
+  machine_type = "e2-medium"
   zone         = var.gcp_zone
 
   boot_disk {
@@ -54,39 +54,45 @@ resource "google_compute_instance" "rke2_node" {
 
   network_interface {
     network = "default"
-    access_config {} # รับ Public IP
+    access_config {} # ขอ Public IP
   }
 
   metadata = {
+    # แก้ไขจุดที่ 2: รับ SSH Key จากตัวแปร (Clean Code)
     ssh-keys = "ubuntu:${var.ssh_public_key}"
   }
 
-  # --- จุดแก้ที่สำคัญที่สุด (Startup Script) ---
+  # แก้ไขจุดที่ 3: Startup Script แบบ Robust (บันทึก Log + ใส่ Role ครบ)
   metadata_startup_script = <<-EOF
     #!/bin/bash
-    # บันทึก Log ทุกอย่างลงไฟล์นี้ (ถ้าพัง ให้ ssh มาเปิดไฟล์นี้ดู)
+    # 1. บันทึก Log ทุกอย่างลงไฟล์ /var/log/rke2-install.log (เอาไว้ Debug)
     exec > /var/log/rke2-install.log 2>&1
     set -x
 
-    echo "[INFO] 1. Preparing Node..."
+    echo "[INFO] Starting RKE2 Installation..."
+
+    # 2. ติดตั้งเครื่องมือจำเป็น
     apt-get update -y && apt-get install -y curl
 
-    echo "[INFO] 2. Retrieving Join Command from Terraform..."
-    # ดึงคำสั่ง Join ที่ Rancher สร้างให้ มาเก็บใส่ตัวแปร
-    # (คำสั่งนี้จะหน้าตาประมาณ: curl ... | sudo sh -)
+    # 3. ดึงคำสั่ง Join จาก Terraform มาเก็บใส่ตัวแปร CMD
+    # (คำสั่งนี้คือ curl ... | sudo sh -)
     CMD='${rancher2_cluster_v2.student_project.cluster_registration_token.0.insecure_node_command}'
-
-    # กำหนด Role ให้กับ Node นี้ (เป็นทุกอย่างในเครื่องเดียว)
+    
+    # 4. กำหนด Role ให้กับ Node นี้ (เป็นทุกอย่าง: Database, Controlplane, Worker)
     ROLES="--etcd --controlplane --worker"
 
-    echo "[INFO] 3. Executing Join Command with Roles..."
-    # สั่งรันคำสั่ง Join พร้อมพ่วง Role เข้าไป
-    # (eval จำเป็นเพื่อให้ shell เข้าใจคำสั่งยาวๆ)
+    echo "[INFO] Executing Join Command..."
+    
+    # 5. รันคำสั่ง Join (ใช้ eval เพื่อให้รวม CMD และ ROLES เข้าด้วยกันถูกต้อง)
     eval "$CMD $ROLES"
 
     echo "[INFO] Installation script finished."
+    
+    # เช็คสถานะ Service (รอ 20 วิ)
+    sleep 20
+    systemctl status rancher-system-agent
   EOF
 
-  # ต้องรอให้ Cluster สร้างใน Rancher เสร็จก่อน ถึงจะสร้าง VM ได้
+  # บังคับให้รอ Cluster สร้างใน Rancher เสร็จก่อน
   depends_on = [ rancher2_cluster_v2.student_project ]
 }
