@@ -24,14 +24,12 @@ provider "rancher2" {
   insecure   = true
 }
 
-# ✅ FIX 1: สร้าง Cluster พร้อมตั้งค่าให้ Generate Token
+# ✅ สร้าง Cluster
 resource "rancher2_cluster_v2" "student_project" {
   name = "student-rke2-cluster"
   
-  # ✅ ใช้ตัวแปร Kubernetes Version
   kubernetes_version = var.workload_kubernetes_version
   
-  # ✅ เพิ่ม Agent Env Variables
   agent_env_vars = {
     "HTTP_PROXY"  = ""
     "HTTPS_PROXY" = ""
@@ -43,7 +41,6 @@ cni: "calico"
 EOF
   }
 
-  # ✅ Force Renewal ของ Token (ถ้า Token หมดอายุ)
   lifecycle {
     ignore_changes = [
       agent_env_vars
@@ -51,15 +48,14 @@ EOF
   }
 }
 
-# ✅ FIX 2: สร้าง Registration Token อย่างชัดเจน
+# ✅ สร้าง Registration Token
 resource "rancher2_cluster_register_token" "student_token" {
   cluster_id = rancher2_cluster_v2.student_project.id
   
-  # ต้องรอให้ Cluster สร้างสำเร็จ
   depends_on = [rancher2_cluster_v2.student_project]
 }
 
-# ✅ FIX 3: สร้าง VM ด้วย Startup Script ที่ถูกต้อง
+# ✅ สร้าง VM บน GCP
 resource "google_compute_instance" "rke2_node" {
   name         = "rke2-custom-node-1"
   machine_type = "e2-medium"
@@ -77,11 +73,14 @@ resource "google_compute_instance" "rke2_node" {
     access_config {} # Public IP
   }
 
+  # ✅ รวม metadata ทั้งหมดเป็นตัวเดียว (ไม่ใช้ merge)
   metadata = {
-    ssh-keys = "ubuntu:${var.ssh_public_key}"
+    ssh-keys              = "ubuntu:${var.ssh_public_key}"
+    "rancher-api-url"     = var.rancher_url
+    "cluster-token-name"  = rancher2_cluster_register_token.student_token.name
   }
 
-  # ✅ FIX 4: Startup Script ที่ Robust
+  # ✅ Startup Script
   metadata_startup_script = base64decode(base64encode(<<-EOF
 #!/bin/bash
 # ========================================
@@ -97,10 +96,8 @@ echo "[INFO] Starting RKE2 Installation at $(date)..."
 apt-get update -y
 apt-get install -y curl wget jq
 
-# 2. เช็ค Token จาก Rancher
-RANCHER_API="${rancher_api_url}"
-TOKEN_NAME="${cluster_token_name}"
-REGISTRATION_CMD="${registration_command}"
+# 2. ดึง Registration Command จาก Terraform
+REGISTRATION_CMD="${rancher2_cluster_register_token.student_token.insecure_node_command}"
 
 echo "[INFO] Registration Command:"
 echo "$REGISTRATION_CMD"
@@ -112,8 +109,8 @@ if [ -z "$REGISTRATION_CMD" ]; then
   exit 1
 fi
 
-# 4. รันคำสั่ง Join ด้วย sudo
-echo "[INFO] Executing registration command..."
+# 4. รันคำสั่ง Join ด้วย Roles
+echo "[INFO] Executing registration command with roles..."
 eval "sudo $REGISTRATION_CMD --etcd --controlplane --worker"
 
 if [ $? -eq 0 ]; then
@@ -125,32 +122,20 @@ fi
 
 # 5. รอให้ Service เริ่มต้น
 echo "[INFO] Waiting for rancher-system-agent service..."
-sleep 15
+sleep 20
 
 if systemctl is-active --quiet rancher-system-agent; then
   echo "[SUCCESS] rancher-system-agent is running!"
+  systemctl status rancher-system-agent
 else
   echo "[WARNING] Service might still be starting..."
-  journalctl -u rancher-system-agent -n 20
+  journalctl -u rancher-system-agent -n 50
 fi
 
 echo "[INFO] Installation completed at $(date)"
 EOF
   ))
 
-  # ✅ เก็บตัวแปรที่ Script ต้องใช้
-  metadata = merge(
-    {
-      ssh-keys = "ubuntu:${var.ssh_public_key}"
-    },
-    {
-      # เพิ่มเติม Environment Variables
-      "rancher-api-url"      = var.rancher_url
-      "cluster-token-name"   = rancher2_cluster_register_token.student_token.name
-    }
-  )
-
-  # ✅ รอให้ Token สร้างเสร็จ
   depends_on = [
     rancher2_cluster_v2.student_project,
     rancher2_cluster_register_token.student_token
