@@ -30,10 +30,7 @@ resource "rancher2_cluster_v2" "student_project" {
   
   kubernetes_version = var.workload_kubernetes_version
   
-  agent_env_vars = {
-    "HTTP_PROXY"  = ""
-    "HTTPS_PROXY" = ""
-  }
+ 
   
   rke_config {
     machine_global_config = <<EOF
@@ -41,11 +38,7 @@ cni: "calico"
 EOF
   }
 
-  lifecycle {
-    ignore_changes = [
-      agent_env_vars
-    ]
-  }
+ 
 }
 
 # ✅ สร้าง Registration Token
