@@ -1,4 +1,4 @@
-#module_provider.tf
+
 terraform {
   required_providers {
     rancher2 = {
@@ -11,7 +11,6 @@ terraform {
     }
   }
 }
-#####
 
 provider "google" {
   project = var.gcp_project_id
