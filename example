@@ -1,0 +1,364 @@
+---module_provider.tf
+terraform {
+  required_providers {
+    rancher2 = {
+      source  = "rancher/rancher2"
+      version = "~> 5.0.0"
+    }
+    openstack = {
+      source  = "hashicorp/openstack"
+      version = "~> 2.1"
+    }
+  }
+}
+
+---main.tf
+#############################
+# === Resources section === #
+#############################
+resource "rancher2_cluster_v2" "empty_cluster" {
+    name               = var.cluster_name
+    kubernetes_version = var.kubernetes_version
+    enable_network_policy = var.enable_network_policy
+    default_cluster_role_for_project_members = var.default_project_member_role
+    local_auth_endpoint {
+      enabled = true
+    }
+    rke_config {
+        machine_global_config = local.machine_global_yaml
+        machine_selector_config {
+            machine_label_selector {
+                match_expressions {
+                    key = "rke.cattle.io/control-plane-role"
+                    operator = "Exists"
+                }
+            }
+            config =<<EOF
+                kubelet-arg:
+                    - system-reserved=cpu=${var.kubelet_master_cpu_reserved},memory=${var.kubelet_master_mem_reserved},ephemeral-storage=${var.kubelet_master_storage_reserved}
+            EOF
+        }
+        machine_selector_config {
+            machine_label_selector {
+                match_expressions {
+                    key = "rke.cattle.io/worker-role"
+                    operator = "Exists"
+                }
+            }
+            config =<<EOF
+                kubelet-arg:
+                    - system-reserved=cpu=${var.kubelet_worker_cpu_reserved},memory=${var.kubelet_worker_mem_reserved},ephemeral-storage=${var.kubelet_worker_storage_reserved}
+            EOF
+        }
+        machine_selector_config {
+            config =<<EOF
+                protect-kernel-defaults: false
+                etcd-arg:
+                    - cipher-suites=[TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305]
+                kubelet-arg:
+                    - tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+                    - container-log-max-files=7
+                    - container-log-max-size=50Mi
+            EOF
+        }
+        registries {
+            configs {
+                hostname = "${var.system_default_reg}"
+                # auth_config_secret_name = "<auth-config-secret-name>"
+                # insecure = "<tls-insecure-bool>"
+                # tls_secret_name = ""
+                # ca_bundle = ""
+            }
+            mirrors {
+                hostname = var.reg_mirror_hostname
+                endpoints = var.reg_mirror_endpoints
+                rewrites = var.reg_mirror_rewrites
+            }
+        }
+        etcd {
+            snapshot_schedule_cron = var.etcd_snapshot_schedule
+            snapshot_retention = var.etcd_snapshot_retention
+            dynamic "s3_config" {
+              for_each = var.enable_s3_backup ? [1] : []
+              content {
+                bucket = local.s3_bucket
+                endpoint = local.s3_endpoint
+                folder = var.cluster_name
+                cloud_credential_name = var.enable_s3_backup ? rancher2_cloud_credential.credentials[0].id : null
+                skip_ssl_verify = true
+              }
+            }
+        }
+
+        chart_values = null
+        #chart_values = local.calico_network
+        additional_manifest = var.enable_nodelocal ? local.nodelocal_manifest : null
+    }
+
+    dynamic "agent_env_vars" {
+        for_each = local.agent_env_vars_list
+        content {
+            name  = agent_env_vars.value.name
+            value = agent_env_vars.value.value
+        }
+    }
+
+
+    # Optional labels and annotations
+    labels        = var.cluster_labels
+    annotations   = var.cluster_annotations
+
+}
+
+resource "rancher2_cloud_credential" "credentials" {
+  count = var.enable_s3_backup ? 1 : 0
+  name = "${var.cluster_name}-minio-cred"
+  s3_credential_config {
+    access_key = local.s3_access_key
+    secret_key = local.s3_secret_key
+    default_skip_ssl_verify = true
+  }
+}
+
+locals {
+    disable_nginx = var.enable_nginx ? [] : ["- rke2-ingress-nginx"]
+    machine_global_yaml = <<-YAML
+        audit-policy-file: |
+            apiVersion: audit.k8s.io/v1
+            kind: Policy
+            rules:
+            - level: None
+              nonResourceURLs:
+              - '/healthz*'
+              - '/logs'
+              - '/metrics'
+              - '/swagger*'
+              - '/version'
+            - level: None
+              verbs: ["get", "watch", "list"]
+            - level: Metadata
+              omitStages:
+              - RequestReceived
+              resources:
+              - group: authentication.k8s.io
+                resources:
+                - tokenreviews
+            - level: RequestResponse
+              omitStages:
+              - RequestReceived
+              resources:
+              - group: authorization.k8s.io
+                resources:
+                - subjectaccessreviews
+            - level: RequestResponse
+              omitStages:
+              - RequestReceived
+              resources:
+              - group: ''
+                resources: ['pods']
+                verbs: ['*']
+            - level: Metadata
+              omitStages:
+              - RequestReceived
+        cluster-cidr: 100.124.0.0/16
+        service-cidr: 100.125.0.0/16
+        cni: "calico"
+        disable:
+          ${join("\n", local.disable_nginx)}
+        disable-kube-proxy: false
+        etcd-expose-metrics: true
+        kube-apiserver-arg:
+            - audit-log-maxage=10
+            - audit-log-maxbackup=5
+            - audit-log-maxsize=100
+    YAML
+}
+
+locals {
+    agent_env_vars_list = var.enable_proxy ? [
+        {
+            name  = "http_proxy"
+            value = var.http_proxy
+        },
+        {
+            name  = "https_proxy"
+            value = var.https_proxy
+        },
+        {
+            name  = "no_proxy"
+            value = var.no_proxy
+        }
+    ] : []
+
+    nodelocal_manifest = <<EOF
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-coredns
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    nodelocal:
+      enabled: true
+EOF
+
+}
+
+locals {
+  s3_key = var.cluster_env == "d1" ? "cc-mm5bk" : "cc-pn9k7"
+  s3_endpoint = var.cluster_env == "d1" ? "minio-api.vayu.devopsnonprd.vayuktbcs" : "minio-api.vayu.devops.vayuktbcs"
+  s3_bucket = var.cluster_env == "d1" ? "rke2-etcd-backup" : "rke2-prod-etcd-backup"
+  s3_access_key = var.cluster_env == "d1" ? "n0rPYkUDf7xMmeVZd03S" : "okbGtHBLDlCLvP0q0OEQ"
+  s3_secret_key = var.cluster_env == "d1" ? "9h450oCRIjGUWUwMlKHywK1jiIo96pB4YYpvmvKx" : "eFf817yv1HmHkBXP76nShZHM3DdLI2PjtFVoMKg1"
+}
+
+---vatiables.tf
+variable "site" {
+  type        = string
+  default     = ""
+}
+
+variable "cluster_env" {
+    description = "The env of the Rancher cluster"
+    type        = string
+}
+
+variable "cluster_name" {
+    description = "The name of the Rancher cluster"
+    type        = string
+}
+
+variable "cloud_credential_id" {
+    description = "Rancher cloud credential ID (optional)"
+    type        = string
+    default     = null
+}
+
+variable "cluster_labels" {
+    description = "Labels to apply to the cluster"
+    type        = map(string)
+    default     = {}
+}
+
+variable "cluster_annotations" {
+    description = "Annotations to apply to the cluster"
+    type        = map(string)
+    default     = {}
+}
+
+variable "kubernetes_version" {
+    description = "kubernetes version"
+    type        = string
+    default     = "1.29.7+rk2r1"
+}
+
+variable "enable_network_policy" {
+    type    = bool
+    default = false
+}
+
+variable "default_project_member_role" {
+    type = string
+    default = "user"
+}
+
+variable "reg_mirror_hostname" {
+    type    = string
+    default = ""
+}
+
+variable "reg_mirror_endpoints" {
+    type    = list
+    default = []
+}
+
+variable "reg_mirror_rewrites" {
+    type    = map(string)
+    default = {}
+}
+
+variable "system_default_reg" {
+    type    = string
+    default = ""
+}
+
+variable "http_proxy" {
+    type    = string
+    default = ""
+}
+
+variable "https_proxy" {
+    type    = string
+    default = ""
+}
+
+variable "no_proxy" {
+    type    = string
+    default = ""
+}
+
+variable "enable_proxy" {
+    description = "Enable or disable agent environment variables"
+    type        = bool
+    default     = false
+}
+
+variable "etcd_snapshot_retention" {
+    type = number
+    default = 5
+}
+
+variable "etcd_snapshot_schedule" {
+    type = string
+    default = "0 */12 * * *"
+}
+
+variable "enable_nodelocal" {
+    type        = bool
+    default     = false
+}
+
+variable "enable_nginx" {
+    type    = bool
+    default = true
+}
+
+variable "enable_s3_backup" {
+    type    = bool
+    default = false
+}
+
+variable "kubelet_master_cpu_reserved" {
+    type    = string
+    default = "500m"
+}
+
+variable "kubelet_master_mem_reserved" {
+    type    = string
+    default = "500Mi"
+}
+
+variable "kubelet_master_storage_reserved" {
+    type    = string
+    default = "500Mi"
+}
+
+variable "kubelet_worker_cpu_reserved" {
+    type    = string
+    default = "600m"
+}
+
+variable "kubelet_worker_mem_reserved" {
+    type    = string
+    default = "1Gi"
+}
+
+variable "kubelet_worker_storage_reserved" {
+    type    = string
+    default = "1Gi"
+}
+---output.tf
+output "cluster_id" {
+    description = "The ID of the Rancher cluster"
+    value       = rancher2_cluster_v2.empty_cluster.id
+
