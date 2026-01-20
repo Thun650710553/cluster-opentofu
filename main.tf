@@ -1,4 +1,3 @@
-
 terraform {
   required_providers {
     rancher2 = {
@@ -25,7 +24,7 @@ provider "rancher2" {
   insecure   = true
 }
 
-# ✅ สร้าง Cluster V2 (RKE2)
+# 1. ✅ สร้าง Cluster V2 (RKE2)
 resource "rancher2_cluster_v2" "student_project" {
   name               = "student-rke2-cluster"
   kubernetes_version = var.workload_kubernetes_version
@@ -33,22 +32,36 @@ resource "rancher2_cluster_v2" "student_project" {
   rke_config {
     machine_global_config = <<EOF
 cni: "calico"
+disable-kube-proxy: false
+etcd-expose-metrics: true
 EOF
   }
 }
 
-# ✅ ดึง Registration Token จาก Cluster
-# (Rancher v2/RKE2 สร้าง Token อัตโนมัติ)
-data "rancher2_cluster_v2" "student_cluster" {
-  name = rancher2_cluster_v2.student_project.name
-  
-  depends_on = [rancher2_cluster_v2.student_project]
+# 2. ✅ (สำคัญมาก) สร้าง Firewall Rule ให้ GCP ยอมรับ Traffic
+resource "google_compute_firewall" "allow_rke2" {
+  name    = "allow-rke2-traffic"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22", "80", "443", "6443", "9345", "10250", "2379", "2380", "30000-32767"]
+  }
+
+  allow {
+    protocol = "udp"
+    ports    = ["8472", "30000-32767"] # 8472 สำคัญมากสำหรับ Calico/Canal
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["rancher-node"]
 }
 
-# ✅ สร้าง VM บน GCP
+# 3. ✅ สร้าง VM บน GCP (แก้ Script ให้ง่ายขึ้น)
 resource "google_compute_instance" "rke2_node" {
   name         = "rke2-custom-node-1"
-  machine_type = "e2-medium"
+  # แนะนำ e2-standard-2 เพราะ e2-medium (Ram 4GB) อาจจะปริ่มๆ จนค้างได้
+  machine_type = "e2-medium" 
   zone         = var.gcp_zone
 
   boot_disk {
@@ -66,95 +79,39 @@ resource "google_compute_instance" "rke2_node" {
   metadata = {
     ssh-keys = "ubuntu:${var.ssh_public_key}"
   }
-
-  # ✅ Startup Script - ดึง Token จาก Rancher API
-  metadata_startup_script = base64decode(base64encode(<<-EOF
-#!/bin/bash
-# ========================================
-# RKE2 Node Registration Script
-# ========================================
-
-exec > /var/log/rke2-install.log 2>&1
-set -x
-
-echo "[INFO] Starting RKE2 Installation at $(date)..."
-
-# 1. ติดตั้ง Dependencies
-apt-get update -y
-apt-get install -y curl wget jq
-
-# 2. ตั้งค่า Variables
-RANCHER_URL="${var.rancher_url}"
-RANCHER_TOKEN="${var.rancher_access_key}"
-CLUSTER_ID="${rancher2_cluster_v2.student_project.id}"
-
-echo "[INFO] Rancher URL: $RANCHER_URL"
-echo "[INFO] Cluster ID: $CLUSTER_ID"
-
-# 3. ดึง Registration Token จาก Rancher API
-echo "[INFO] Fetching registration token from Rancher API..."
-RESPONSE=$(curl -s -k \
-  -H "Authorization: Bearer $RANCHER_TOKEN" \
-  "$RANCHER_URL/v1/clusters/$CLUSTER_ID/clusterregistrationtoken")
-
-echo "[DEBUG] API Response:"
-echo "$RESPONSE" | jq .
-
-# 4. ดึง Command จาก Response
-REGISTRATION_CMD=$(echo "$RESPONSE" | jq -r '.items[0].insecureNodeCommand // .items[0].nodeCommand // empty' 2>/dev/null)
-
-echo "[INFO] Registration Command:"
-echo "$REGISTRATION_CMD"
-
-# 5. ตรวจสอบ Command ไม่ว่าง
-if [ -z "$REGISTRATION_CMD" ] || [ "$REGISTRATION_CMD" == "null" ]; then
-  echo "[ERROR] Registration command is empty!"
-  echo "[ERROR] Cluster might not be ready yet or API call failed."
-  echo "[DEBUG] Full response: $RESPONSE"
-  sleep 30
-  # ลองอีกครั้ง
-  RESPONSE=$(curl -s -k \
-    -H "Authorization: Bearer $RANCHER_TOKEN" \
-    "$RANCHER_URL/v1/clusters/$CLUSTER_ID/clusterregistrationtoken")
-  REGISTRATION_CMD=$(echo "$RESPONSE" | jq -r '.items[0].insecureNodeCommand // empty')
   
-  if [ -z "$REGISTRATION_CMD" ]; then
-    echo "[FATAL] Still cannot get registration command. Exiting."
-    exit 1
-  fi
-fi
+  # ต้องติด Tag ให้ตรงกับ Firewall Rule
+  tags = ["rancher-node"] 
 
-# 6. รันคำสั่ง Join ด้วย Roles
-echo "[INFO] Executing registration command with roles..."
-eval "sudo $REGISTRATION_CMD --etcd --controlplane --worker"
+  # ✅ Startup Script แบบใหม่: สั้น ง่าย และชัวร์กว่าเดิม
+  metadata_startup_script = <<-EOF
+    #!/bin/bash
+    exec > /var/log/rke2-install.log 2>&1
+    set -x
 
-if [ $? -eq 0 ]; then
-  echo "[SUCCESS] Registration completed!"
-else
-  echo "[ERROR] Registration failed with exit code $?"
-  exit 1
-fi
+    echo "[INFO] 1. Fixing Ubuntu 22.04 iptables issue..."
+    # แก้ปัญหา Network ตีกันบน Ubuntu รุ่นใหม่ (ท่าไม้ตาย)
+    update-alternatives --set iptables /usr/sbin/iptables-legacy
+    update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+    update-alternatives --set arptables /usr/sbin/arptables-legacy
+    update-alternatives --set ebtables /usr/sbin/ebtables-legacy
 
-# 7. รอให้ Service เริ่มต้น
-echo "[INFO] Waiting for rancher-system-agent service..."
-sleep 20
+    echo "[INFO] 2. Installing Dependencies..."
+    apt-get update -y && apt-get install -y curl
 
-if systemctl is-active --quiet rancher-system-agent; then
-  echo "[SUCCESS] rancher-system-agent is running!"
-  systemctl status rancher-system-agent
-else
-  echo "[WARNING] Service might still be starting..."
-  journalctl -u rancher-system-agent -n 50
-fi
+    echo "[INFO] 3. Running Registration Command..."
+    # ดึงคำสั่งมาจาก Terraform โดยตรงเลย (ไม่ต้อง curl เองให้ยุ่งยาก)
+    # ใส่ CATTLE_INSECURE=true เพื่อแก้ปัญหา Self-Signed Certificate
+    
+    JOIN_CMD='${rancher2_cluster_v2.student_project.cluster_registration_token.0.insecure_node_command}'
+    
+    # เติม Option ให้ครบ
+    sudo CATTLE_INSECURE=true $JOIN_CMD --etcd --controlplane --worker
 
-echo "[INFO] Installation completed at $(date)"
-EOF
-  ))
+    echo "[INFO] Installation Completed! Waiting for node to register..."
+  EOF
 
   depends_on = [
     rancher2_cluster_v2.student_project
   ]
-
-  tags = ["rke2-node", "student-project"]
 }
-

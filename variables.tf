@@ -13,13 +13,13 @@ variable "gcp_project_id" {
 variable "gcp_region" {
   description = "GCP Region"
   type        = string
-  default     = "us-central1"
+  default     = "us-west4"
 }
 
 variable "gcp_zone" {
   description = "GCP Zone"
   type        = string
-  default     = "us-central1-a"
+  default     = "us-west4-b"
 }
 
 variable "rancher_url" {
