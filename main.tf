@@ -59,7 +59,7 @@ resource "google_compute_firewall" "allow_rke2" {  # ✅ ใช้ underscore
   source_ranges = ["0.0.0.0/0"]  # ⚠️ ระวัง! ควร restrict ใน production
   target_tags   = ["allow-rke2"]
 }
-allow {
+  allow {
     protocol = "icmp"
   }
 # 3. สร้าง VM บน GCP
