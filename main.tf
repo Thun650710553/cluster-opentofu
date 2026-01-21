@@ -93,6 +93,16 @@ resource "google_compute_instance" "rke2_node" {
     update-alternatives --set arptables /usr/sbin/arptables-legacy
     update-alternatives --set ebtables /usr/sbin/ebtables-legacy
     
+    echo "[INFO] Fixing Certificate Authority..."
+
+    # ✅ เพิ่มท่อนนี้เข้าไป: ดูด Cert และสั่ง Trust
+    apt-get update -y && apt-get install -y openssl ca-certificates
+    
+    # ดึง Cert จาก Domain มาลงเครื่อง
+    openssl s_client -showcerts -connect rancher.thunjp.space:443 </dev/null 2>/dev/null | openssl x509 -outform PEM > /usr/local/share/ca-certificates/rancher.crt
+    
+    # อัปเดตให้ OS รู้จัก
+    update-ca-certificates
     echo "[INFO] Installing curl..."
     apt-get update -y && apt-get install -y curl
     
