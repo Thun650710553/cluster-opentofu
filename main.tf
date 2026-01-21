@@ -39,8 +39,8 @@ EOF
 }
 
 # 2. ✅ (สำคัญมาก) สร้าง Firewall Rule ให้ GCP ยอมรับ Traffic
-resource "google_compute_firewall" "allow_rke2" {
-  name    = "allow-rke2-traffic"
+resource "google_compute_firewall" "rancher-node" {
+  name    = "rancher-node"
   network = "default"
 
   allow {
@@ -54,7 +54,7 @@ resource "google_compute_firewall" "allow_rke2" {
   }
 
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["rancher-node","allow-rke2-traffic","http-server", "https-server"]
+  target_tags   = ["rancher-node"]
 }
 
 # 3. ✅ สร้าง VM บน GCP (แก้ Script ให้ง่ายขึ้น)
@@ -80,39 +80,31 @@ resource "google_compute_instance" "rke2_node" {
   }
   
   # ต้องติด Tag ให้ตรงกับ Firewall Rule
-  tags = ["rancher-node"] 
+  tags = ["rancher-node","http-server", "https-server"] 
 
-  # ✅ Startup Script แบบใหม่: สั้น ง่าย และชัวร์กว่าเดิม
   metadata_startup_script = <<-EOF
     #!/bin/bash
     exec > /var/log/rke2-install.log 2>&1
     set -x
-
-    echo "[INFO] 1. Fixing Ubuntu 22.04 iptables issue..."
-    # แก้ปัญหา Network ตีกันบน Ubuntu รุ่นใหม่ (ท่าไม้ตาย)
+    
+    echo "[INFO] Fixing Ubuntu 22.04 iptables..."
     update-alternatives --set iptables /usr/sbin/iptables-legacy
     update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
     update-alternatives --set arptables /usr/sbin/arptables-legacy
     update-alternatives --set ebtables /usr/sbin/ebtables-legacy
-
-    echo "[INFO] 2. Installing Dependencies..."
+    
+    echo "[INFO] Installing curl..."
     apt-get update -y && apt-get install -y curl
-    sudo -i curl -sfL https://get.rke2.io | sh -
-    systemctl enable rke2-server.service
-    systemctl start rke2-server.service
-    echo "[INFO] 3. Running Registration Command..."
-    # ดึงคำสั่งมาจาก Terraform โดยตรงเลย (ไม่ต้อง curl เองให้ยุ่งยาก)
-    # ใส่ CATTLE_INSECURE=true เพื่อแก้ปัญหา Self-Signed Certificate
     
-    JOIN_CMD='${rancher2_cluster_v2.student_project.cluster_registration_token.0.insecure_node_command}'
+    echo "[INFO] Running Rancher registration..."
+    # Let Rancher's command handle RKE2 installation
+    ${rancher2_cluster_v2.student_project.cluster_registration_token[0].insecure_node_command} --etcd --controlplane --worker
     
-    # เติม Option ให้ครบ
-    sudo CATTLE_INSECURE=true $JOIN_CMD --etcd --controlplane --worker
-
-    echo "[INFO] Installation Completed! Waiting for node to register..."
+    echo "[INFO] Registration complete!"
   EOF
-
+  
   depends_on = [
-    rancher2_cluster_v2.student_project
+    rancher2_cluster_v2.student_project,
+    google_compute_firewall.allow_rke2
   ]
 }
