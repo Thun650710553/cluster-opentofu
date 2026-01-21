@@ -30,11 +30,14 @@ resource "rancher2_cluster_v2" "student_project" {
   kubernetes_version = var.workload_kubernetes_version
   
   rke_config {
-    machine_global_config = <<EOF
-cni: "calico"
-disable-kube-proxy: false
-etcd-expose-metrics: true
-EOF
+    machine_global_config = <<-EOF
+      cni: "calico"
+      disable-kube-proxy: false
+      etcd-expose-metrics: true
+    EOF
+  }
+   local_auth_endpoint {
+    enabled = true
   }
 }
 
@@ -45,7 +48,7 @@ resource "google_compute_firewall" "allow_rke2" {  # ✅ ใช้ underscore
   
   allow {
     protocol = "tcp"
-    ports    = ["22", "80", "443", "6443", "9345", "10250", "10254", "2379", "2380", "30000-32767"]
+    ports    = ["22", "80", "443", "6443", "9345", "10250", "10254", "2379-2380", "30000-32767"]
   }
   
   allow {
@@ -56,7 +59,9 @@ resource "google_compute_firewall" "allow_rke2" {  # ✅ ใช้ underscore
   source_ranges = ["0.0.0.0/0"]  # ⚠️ ระวัง! ควร restrict ใน production
   target_tags   = ["allow-rke2"]
 }
-
+allow {
+    protocol = "icmp"
+  }
 # 3. สร้าง VM บน GCP
 resource "google_compute_instance" "rke2_node" {
   name         = "rke2-custom-node-1"
