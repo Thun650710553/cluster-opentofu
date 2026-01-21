@@ -105,6 +105,6 @@ resource "google_compute_instance" "rke2_node" {
   
   depends_on = [
     rancher2_cluster_v2.student_project,
-    google_compute_firewall.allow_rke2
+    google_compute_firewall.rancher-node
   ]
 }
