@@ -60,7 +60,6 @@ resource "google_compute_firewall" "allow_rke2" {
 # 3. ✅ สร้าง VM บน GCP (แก้ Script ให้ง่ายขึ้น)
 resource "google_compute_instance" "rke2_node" {
   name         = "rke2-custom-node-1"
-  # แนะนำ e2-standard-2 เพราะ e2-medium (Ram 4GB) อาจจะปริ่มๆ จนค้างได้
   machine_type = "e2-medium" 
   zone         = var.gcp_zone
 
