@@ -54,7 +54,7 @@ resource "google_compute_firewall" "allow_rke2" {
   }
 
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["rancher-node"]
+  target_tags   = ["rancher-node","allow-rke2-traffic"]
 }
 
 # 3. ✅ สร้าง VM บน GCP (แก้ Script ให้ง่ายขึ้น)
@@ -98,7 +98,9 @@ resource "google_compute_instance" "rke2_node" {
 
     echo "[INFO] 2. Installing Dependencies..."
     apt-get update -y && apt-get install -y curl
-
+    sudo -i curl -sfL https://get.rke2.io | sh -
+    systemctl enable rke2-server.service
+    systemctl start rke2-server.service
     echo "[INFO] 3. Running Registration Command..."
     # ดึงคำสั่งมาจาก Terraform โดยตรงเลย (ไม่ต้อง curl เองให้ยุ่งยาก)
     # ใส่ CATTLE_INSECURE=true เพื่อแก้ปัญหา Self-Signed Certificate
