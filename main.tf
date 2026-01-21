@@ -54,7 +54,7 @@ resource "google_compute_firewall" "allow_rke2" {
   }
 
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["rancher-node","allow-rke2-traffic"]
+  target_tags   = ["rancher-node","allow-rke2-traffic","http-server", "https-server"]
 }
 
 # 3. ✅ สร้าง VM บน GCP (แก้ Script ให้ง่ายขึ้น)
