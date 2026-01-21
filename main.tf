@@ -39,8 +39,8 @@ EOF
 }
 
 # 2. ✅ (สำคัญมาก) สร้าง Firewall Rule ให้ GCP ยอมรับ Traffic
-resource "google_compute_firewall" "rancher-node" {
-  name    = "rancher-node"
+resource "google_compute_firewall" "allow-rke2" {
+  name    = "allow-rke2"
   network = "default"
 
   allow {
@@ -54,7 +54,7 @@ resource "google_compute_firewall" "rancher-node" {
   }
 
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["rancher-node"]
+  target_tags   = ["allow-rke2"]
 }
 
 # 3. ✅ สร้าง VM บน GCP (แก้ Script ให้ง่ายขึ้น)
@@ -105,6 +105,6 @@ resource "google_compute_instance" "rke2_node" {
   
   depends_on = [
     rancher2_cluster_v2.student_project,
-    google_compute_firewall.rancher-node
+    google_compute_firewall.allow-rke2
   ]
 }
