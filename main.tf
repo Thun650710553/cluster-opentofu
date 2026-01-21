@@ -55,13 +55,14 @@ resource "google_compute_firewall" "allow_rke2" {  # ✅ ใช้ underscore
     protocol = "udp"
     ports    = ["8472", "4789", "30000-32767"]
   }
+  allow {
+    protocol = "icmp"
+  }
   
   source_ranges = ["0.0.0.0/0"]  # ⚠️ ระวัง! ควร restrict ใน production
   target_tags   = ["allow-rke2"]
 }
-  allow {
-    protocol = "icmp"
-  }
+
 # 3. สร้าง VM บน GCP
 resource "google_compute_instance" "rke2_node" {
   name         = "rke2-custom-node-1"
