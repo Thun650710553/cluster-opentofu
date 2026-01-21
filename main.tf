@@ -80,7 +80,7 @@ resource "google_compute_instance" "rke2_node" {
   }
   
   # ต้องติด Tag ให้ตรงกับ Firewall Rule
-  tags = ["rancher-node","http-server", "https-server",allow-rke2] 
+  tags = ["rancher-node","http-server", "https-server","allow-rke2"] 
 
   metadata_startup_script = <<-EOF
     #!/bin/bash
