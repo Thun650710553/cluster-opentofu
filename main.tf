@@ -24,9 +24,9 @@ provider "rancher2" {
   insecure   = true
 }
 
-# 1. ✅ สร้าง Cluster V2 (RKE2)
+# 1. สร้าง Cluster V2 (RKE2)
 resource "rancher2_cluster_v2" "student_project" {
-  name               = "student-rke2-cluster"
+  name               = "cluster"
   kubernetes_version = var.workload_kubernetes_version
   
   rke_config {
@@ -38,50 +38,49 @@ EOF
   }
 }
 
-# 2. ✅ (สำคัญมาก) สร้าง Firewall Rule ให้ GCP ยอมรับ Traffic
-resource "google_compute_firewall" "allow-rke2" {
-  name    = "allow-rke2"
+# 2. สร้าง Firewall Rule
+resource "google_compute_firewall" "allow_rke2" {  # ✅ ใช้ underscore
+  name    = "allow-rke2"  # ชื่อจริงบน GCP ใช้ hyphen ได้
   network = "default"
-
+  
   allow {
     protocol = "tcp"
-    ports    = ["22", "80", "443", "6443", "9345", "10250", "2379", "2380", "30000-32767"]
+    ports    = ["22", "80", "443", "6443", "9345", "10250", "10254", "2379", "2380", "30000-32767"]
   }
-
+  
   allow {
     protocol = "udp"
-    ports    = ["8472", "30000-32767"] # 8472 สำคัญมากสำหรับ Calico/Canal
+    ports    = ["8472", "4789", "30000-32767"]
   }
-
-  source_ranges = ["0.0.0.0/0"]
+  
+  source_ranges = ["0.0.0.0/0"]  # ⚠️ ระวัง! ควร restrict ใน production
   target_tags   = ["allow-rke2"]
 }
 
-# 3. ✅ สร้าง VM บน GCP (แก้ Script ให้ง่ายขึ้น)
+# 3. สร้าง VM บน GCP
 resource "google_compute_instance" "rke2_node" {
   name         = "rke2-custom-node-1"
   machine_type = "e2-medium" 
   zone         = var.gcp_zone
-
+  
   boot_disk {
     initialize_params {
       image = "ubuntu-os-cloud/ubuntu-2204-lts"
-      size  = 40
+      size  = 50  # ✅ เพิ่มเป็น 50GB ปลอดภัยกว่า
     }
   }
-
+  
   network_interface {
     network = "default"
-    access_config {} # Public IP
+    access_config {}
   }
-
+  
   metadata = {
     ssh-keys = "ubuntu:${var.ssh_public_key}"
   }
   
-  # ต้องติด Tag ให้ตรงกับ Firewall Rule
-  tags = ["rancher-node","http-server", "https-server","allow-rke2"] 
-
+  tags = ["allow-rke2"]  # ✅ ใช้แค่ tag เดียวที่ตรงกับ firewall
+  
   metadata_startup_script = <<-EOF
     #!/bin/bash
     exec > /var/log/rke2-install.log 2>&1
@@ -93,21 +92,10 @@ resource "google_compute_instance" "rke2_node" {
     update-alternatives --set arptables /usr/sbin/arptables-legacy
     update-alternatives --set ebtables /usr/sbin/ebtables-legacy
     
-    echo "[INFO] Fixing Certificate Authority..."
-
-    # ✅ เพิ่มท่อนนี้เข้าไป: ดูด Cert และสั่ง Trust
-    apt-get update -y && apt-get install -y openssl ca-certificates
-    
-    # ดึง Cert จาก Domain มาลงเครื่อง
-    openssl s_client -showcerts -connect rancher.thunjp.space:443 </dev/null 2>/dev/null | openssl x509 -outform PEM > /usr/local/share/ca-certificates/rancher.crt
-    
-    # อัปเดตให้ OS รู้จัก
-    update-ca-certificates
-    echo "[INFO] Installing curl..."
-    apt-get update -y && apt-get install -y curl
+    echo "[INFO] Installing dependencies..."
+    apt-get update -y && apt-get install -y curl ca-certificates
     
     echo "[INFO] Running Rancher registration..."
-    # Let Rancher's command handle RKE2 installation
     ${rancher2_cluster_v2.student_project.cluster_registration_token[0].insecure_node_command} --etcd --controlplane --worker
     
     echo "[INFO] Registration complete!"
@@ -115,6 +103,6 @@ resource "google_compute_instance" "rke2_node" {
   
   depends_on = [
     rancher2_cluster_v2.student_project,
-    google_compute_firewall.allow-rke2
+    google_compute_firewall.allow_rke2  # ✅ ใช้ underscore
   ]
 }
