@@ -93,25 +93,7 @@ resource "google_compute_instance" "rke2_node" {
   
   tags = ["allow-rke2"]  # ✅ ใช้แค่ tag เดียวที่ตรงกับ firewall
   
-  metadata_startup_script = <<-EOF
-    #!/bin/bash
-    exec > /var/log/rke2-install.log 2>&1
-    set -x
-    
-    echo "[INFO] Fixing Ubuntu 22.04 iptables..."
-    update-alternatives --set iptables /usr/sbin/iptables-legacy
-    update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
-    update-alternatives --set arptables /usr/sbin/arptables-legacy
-    update-alternatives --set ebtables /usr/sbin/ebtables-legacy
-    
-    echo "[INFO] Installing dependencies..."
-    apt-get update -y && apt-get install -y curl ca-certificates
-    
-    echo "[INFO] Running Rancher registration..."
-    ${rancher2_cluster_v2.student_project.cluster_registration_token[0].insecure_node_command} --etcd --controlplane --worker
-    
-    echo "[INFO] Registration complete!"
-  EOF
+  
   
   depends_on = [
     rancher2_cluster_v2.student_project,
