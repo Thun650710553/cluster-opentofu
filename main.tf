@@ -83,6 +83,13 @@ resource "google_compute_instance" "rke2_node" {
   metadata = {
     ssh-keys = "ubuntu:${var.ssh_public_key}"
   }
+  metadata_startup_script = templatefile("${path.module}/startup.sh", {
+    # Pass variables from Terraform to the Shell Script
+    rancher_url          = var.rancher_url
+    node_name            = "rke2-custom-node-1"
+    registration_command = rancher2_cluster_v2.student_project.cluster_registration_token.0.insecure_node_command
+    node_roles           = "--etcd --controlplane --worker"
+  })
   
   tags = ["allow-rke2"]  # ✅ ใช้แค่ tag เดียวที่ตรงกับ firewall
   
