@@ -42,8 +42,8 @@ resource "rancher2_cluster_v2" "student_project" {
 }
 
 # 2. สร้าง Firewall Rule
-resource "google_compute_firewall" "allow_rke2" {  # ✅ ใช้ underscore
-  name    = "allow-rke2"  # ชื่อจริงบน GCP ใช้ hyphen ได้
+resource "google_compute_firewall" "allow_rke2" {  
+  name    = "allow-rke2"  
   network = "default"
   
   allow {
@@ -59,7 +59,7 @@ resource "google_compute_firewall" "allow_rke2" {  # ✅ ใช้ underscore
     protocol = "icmp"
   }
   
-  source_ranges = ["0.0.0.0/0"]  # ⚠️ ระวัง! ควร restrict ใน production
+  source_ranges = ["0.0.0.0/0"]  # ⚠️ ควร restrict ใน production
   target_tags   = ["allow-rke2"]
 }
 
@@ -72,7 +72,7 @@ resource "google_compute_instance" "rke2_node" {
   boot_disk {
     initialize_params {
       image = "ubuntu-os-cloud/ubuntu-2204-lts"
-      size  = 50  # ✅ เพิ่มเป็น 50GB ปลอดภัยกว่า
+      size  = 50  # ✅ เพิ่มเป็น 50GB 
     }
   }
   
@@ -92,12 +92,13 @@ resource "google_compute_instance" "rke2_node" {
     node_roles           = "--etcd --controlplane --worker"
   })
   
-  tags = ["allow-rke2"]  # ✅ ใช้แค่ tag เดียวที่ตรงกับ firewall
+  tags = ["allow-rke2"]  # ✅  tag เดียวที่ตรงกับ firewall
   
   
   
   depends_on = [
     rancher2_cluster_v2.student_project,
-    google_compute_firewall.allow_rke2  # ✅ ใช้ underscore
+    google_compute_firewall.allow_rke2  
   ]
+
 }
